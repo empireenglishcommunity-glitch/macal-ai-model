@@ -1,0 +1,57 @@
+# ─── Secrets: never commit anything in these ─────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_*
+credentials*.json
+secrets/
+
+# ─── Runtime state (never in git) ────────────────────────────
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+workspace/
+sandbox/
+audit/
+
+# ─── Memory: lives in the PRIVATE macal-memory repo ──────────
+memory/
+macal-memory/
+
+# ─── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ─── Node ────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# ─── Models / large artefacts ────────────────────────────────
+models/
+*.gguf
+*.bin
+*.safetensors
+*.onnx
+
+# ─── Editors / OS ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
