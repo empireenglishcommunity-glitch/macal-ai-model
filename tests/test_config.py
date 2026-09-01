@@ -99,13 +99,45 @@ def test_shipped_config_yaml_loads() -> None:
     assert config.version == SUPPORTED_VERSION
 
 
-def test_shipped_config_ships_every_tier_disabled() -> None:
-    """Fail closed: no brain adapter exists until task 1.3, so nothing may claim
-    to be usable. A restored or freshly cloned system comes up inert on purpose,
-    so an operator notices "nothing is running" rather than getting a
-    half-configured brain."""
+def test_shipped_config_enables_only_the_tiers_that_have_an_adapter() -> None:
+    """Supersedes the task-1.1 assertion that *every* tier ships disabled.
+
+    That assertion was right while no adapter existed. Task 1.3 added the
+    adapters, so the meaningful invariant is now narrower and sharper: the cloud
+    tiers are on, and **tier D stays off until the owner's PC is actually
+    reachable** (task 7.1). Enabling `private` early would leave sensitive
+    ministries on a chain whose only live links are third-party APIs — the exact
+    opposite of that tier's purpose.
+    """
     config = load_config(REPO_ROOT / "config.yaml")
-    assert config.enabled_tiers() == ()
+    assert set(config.enabled_tiers()) == {"reflex", "thinking", "deep"}
+    assert config.brains.tiers["private"].enabled is False
+
+
+def test_every_enabled_tier_names_a_model() -> None:
+    config = load_config(REPO_ROOT / "config.yaml")
+    for name in config.enabled_tiers():
+        assert config.brains.tiers[name].model, name
+
+
+def test_the_private_tier_has_no_cloud_fallback() -> None:
+    """R12.4, and the single most important line in the fallback table.
+
+    Tier D exists so money, health and family never leave the owner's own
+    hardware. A cloud tier appearing in this chain would silently break that
+    promise, and the failure would be invisible — the answer would simply arrive.
+    """
+    config = load_config(REPO_ROOT / "config.yaml")
+    assert config.fallback_chain("private") == ("private",)
+
+
+def test_no_enabled_tier_is_paid() -> None:
+    """$0 by default (N1), asserted against the file that actually ships."""
+    config = load_config(REPO_ROOT / "config.yaml")
+    assert config.brains.allow_paid_providers is False
+    for name in config.enabled_tiers():
+        provider = config.brains.providers[config.brains.tiers[name].provider]
+        assert provider.paid is False, name
 
 
 def test_shipped_config_declares_a_fallback_chain_for_every_tier() -> None:

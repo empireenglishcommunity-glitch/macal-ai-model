@@ -89,6 +89,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 tools/check_traceability.py
 
+      # Exercises the SHIPPED config.yaml, the real adapters and the real audit
+      # log — not fakes. Catches a fallback chain that has been edited into
+      # something that cannot actually fall back, which unit tests with fake
+      # brains would happily continue to pass.
+      - name: Gate — router falls through and never loses input (R11)
+        if: ${{ !cancelled() }}
+        run: python3 tools/verify_router.py
+
       # `.env.example` is committed. A value in it is a leaked credential.
       - name: Gate — .env.example holds names only
         if: ${{ !cancelled() }}

@@ -14,15 +14,15 @@
 
 | | |
 |---|---|
-| **Phase** | **1 — in progress. Tasks 1.1 and 1.2 complete; 1.3 is next.** |
+| **Phase** | **1 — in progress. Tasks 1.1, 1.2, 1.3 complete. Deployment is being pulled forward before 1.4.** |
 | **Spec** | Approved by the owner and merged (PR #1, merge commit `7820d3e`). |
 | **Credentials** | ✅ All three exist on the server at `/opt/macal-vizier/.env` (mode 600). Telegram bot `@macal_ai_assisstant_bot` live · Groq key created · GitHub fine-grained PAT created. |
-| **Implemented** | **Tasks 1.1 + 1.2** — config contract, `clock.py` (the one time-helper set), append-only audit log, Telegram door with the allowlist. **114 tests.** No brain, no memory, no hands. **The door exists but nothing behind it can think yet, and nothing is deployed, so the Vizier still cannot be talked to.** |
+| **Implemented** | **Tasks 1.1 + 1.2 + 1.3** — config contract, `clock.py`, audit log, Telegram door + allowlist, `Brain` seam with **two adapters of different wire formats**, tier router with fallback, durable pending queue. **169 tests.** No memory, no hands, no orchestrator. **Nothing is deployed, so the Vizier still cannot be talked to — that is the next thing fixed.** |
 | **Deployed** | ❌ Nothing. **The Hetzner server runs no Vizier code** — the only thing on it is the `.env` file the owner created. Deployment is task 1.8. |
 | **Verified** | 2026-08-31, locally under `python3.12` (3.12.13): `ruff check` clean · `ruff format --check` 24 files clean · `mypy` strict, 15 files, no issues · `pytest -q` **31 passed** · both gate scripts exit 0. CI on the branch is the independent confirmation. |
 | **`main` protection** | ✅ Ruleset `protect-main` (id 21968385) active, `bypass_actors: []`. A direct PUT to `main` returns **409** "Changes must be made through a pull request." Verified live. |
 | **Model list** | ✅ Received and recorded in `design.md` §2.1 — 14 models. Tier A/B/C chosen. **D4 corrected: no DeepSeek/Kimi-class model is available on this key**; strongest is a 120b open model. Two unplanned finds: a dedicated injection classifier (new **D13**) and Whisper on the same key (D11 confirmed). |
-| **Next action** | Task 1.3 — `Brain` protocol, adapter, second adapter to prove N6, router with the fallback chain. After 1.3 the door has something to think with. |
+| **Next action** | ⚠️ **Sequencing gap in this plan, being fixed rather than followed.** Task 1.2's exit criterion is "send from a phone, get a reply", which is impossible until something runs — and deployment sits at 1.8, five tasks later. So a minimal runnable wiring (door → router → reply) plus the container is being pulled forward next, so the owner can smoke-test from his phone. Then 1.4 (Conscience + D13), 1.5 (Spine), 1.6 (Aql spike), 1.7 (orchestrator). |
 
 **Rules for whoever executes this (including future me):**
 

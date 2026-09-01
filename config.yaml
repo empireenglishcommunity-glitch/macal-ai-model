@@ -29,40 +29,54 @@ brains:
       api_key_env: VIZIER_GROQ_API_KEY
       paid: false
 
-    # Tier D — the private/offline brain on the owner's Windows PC.
+    # Tier D — the private/offline brain on the owner's own PC.
     # Disabled until Phase 7; no key, nothing leaves the house.
-    ollama:
-      kind: ollama
+    local:
+      kind: local_daemon
       base_url: http://127.0.0.1:11434
       api_key_env: null
       paid: false
 
-  # Every tier ships DISABLED and with `model: null`.
-  # This is deliberate and it is the fail-closed posture (constraint 11):
-  # no adapter exists until task 1.3, so nothing may claim to be usable.
-  # Task 1.3 fills these in from the owner's REAL Groq model list —
-  # they are not guessed here.
+  # Model IDs below were READ FROM THE OWNER'S OWN ACCOUNT on 2026-09-01, not
+  # chosen from documentation. Re-derive before trusting them — catalogues change
+  # monthly, and design.md §2.1 records the command:
+  #   curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $VIZIER_GROQ_API_KEY"
+  #
+  # See design.md §2.1 for the full table and for the recorded CORRECTION to D4:
+  # no near-frontier (DeepSeek-V4-Pro / Kimi-K3 class) model is reachable on this
+  # key, so `deep` is the strongest available rather than the strongest that
+  # exists. That gap is deferred to task 4.1 with real numbers, not hidden here.
   tiers:
+    # ~90% of calls: routing, intent, classification. Smallest reasoning model
+    # that still has the full context window.
     reflex:
       provider: groq
-      model: null
-      enabled: false
+      model: openai/gpt-oss-20b
+      enabled: true
       max_tokens: 512
       temperature: 0.0
+
+    # The workhorse: ordinary turns, drafting, memory writes.
     thinking:
       provider: groq
-      model: null
-      enabled: false
+      model: qwen/qwen3.8-27b
+      enabled: true
       max_tokens: 4096
       temperature: 0.3
+
+    # Multi-file code work and hard reasoning. Weaker than D4 assumed — see above.
     deep:
       provider: groq
-      model: null
-      enabled: false
+      model: openai/gpt-oss-120b
+      enabled: true
       max_tokens: 8192
       temperature: 0.3
+
+    # Tier D. Stays DISABLED until Phase 7 (task 7.1), because enabling it before
+    # the owner's PC is reachable would put sensitive ministries on a chain whose
+    # only live links are third-party APIs — the exact opposite of its purpose.
     private:
-      provider: ollama
+      provider: local
       model: null
       enabled: false
       max_tokens: 4096
@@ -75,6 +89,9 @@ brains:
     reflex: [reflex, thinking, private]
     thinking: [thinking, reflex, private]
     deep: [deep, thinking, private]
+    # `private` deliberately has NO fallback. A sensitive ministry must refuse
+    # rather than quietly route to a third-party API (R12.4). Adding a cloud tier
+    # to this chain would silently break the one promise tier D exists to keep.
     private: [private]
 
 # ─── Door ──────────────────────────────────────────────────────────────────
