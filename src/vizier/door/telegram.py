@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import json
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,6 +37,15 @@ from vizier.conscience.audit import AuditEvent, AuditLog
 #: Telegram rejects messages over 4096 characters. Chunking at 4000 leaves room
 #: for the "(1/3)" style prefixes a future task may add without re-tuning this.
 CHUNK_LIMIT: Final[int] = 4000
+
+#: Ceiling for poll backoff. One minute is long enough to stop a hot loop from
+#: costing CPU on a box shared with the students' bot, and short enough that the
+#: owner does not notice the delay once the outage clears.
+MAX_POLL_BACKOFF_SECONDS: Final[float] = 60.0
+
+#: Longest single sleep during a backoff. Kept under Docker's default 10-second
+#: stop grace period so a shutdown signal is always acted on before ``SIGKILL``.
+POLL_TICK_SECONDS: Final[float] = 1.0
 
 #: Arabic, Arabic Supplement, Extended-A, and Presentation Forms.
 ARABIC_RANGES: Final[tuple[tuple[int, int], ...]] = (
@@ -63,7 +73,21 @@ class Transport(Protocol):
 
 
 class TransportError(Exception):
-    """The Telegram API could not be reached, or returned ``ok: false``."""
+    """The Telegram API could not be reached, or returned ``ok: false``.
+
+    ``status`` carries the HTTP status when there was one, because the poll loop
+    must distinguish "Telegram is briefly unreachable" (retry soon) from "this
+    token is wrong" (retrying at speed forever achieves nothing).
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def is_permanent(self) -> bool:
+        """A wrong or revoked token will not fix itself by retrying."""
+        return self.status in (401, 403, 404)
 
 
 class HttpTransport:
@@ -93,7 +117,7 @@ class HttpTransport:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             # Deliberately does not include the URL: it contains the token.
-            raise TransportError(f"{method}: HTTP {exc.code}") from exc
+            raise TransportError(f"{method}: HTTP {exc.code}", status=exc.code) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise TransportError(f"{method}: {type(exc).__name__}") from exc
 
@@ -511,22 +535,98 @@ class Door:
             self._offsets.write(next_offset)
         return next_offset
 
-    def run(self, should_stop: Callable[[], bool]) -> None:
+    @staticmethod
+    def _interruptible_wait(seconds: float, should_stop: Callable[[], bool]) -> None:
+        """Sleep in short slices so a shutdown signal is noticed promptly.
+
+        A single ``time.sleep(60)`` inside the backoff means a ``SIGTERM`` is not
+        seen for up to a minute. Measured on a real container: asked to stop during
+        a backoff it took **29 seconds** to exit, and Docker sends ``SIGKILL`` after
+        10 — so a redeploy during an outage would kill the process mid-write instead
+        of letting it record why it stopped. Found by timing a real run, not by a
+        test.
+        """
+        remaining = seconds
+        while remaining > 0 and not should_stop():
+            slice_seconds = min(remaining, POLL_TICK_SECONDS)
+            time.sleep(slice_seconds)
+            remaining -= slice_seconds
+
+    def run(
+        self,
+        should_stop: Callable[[], bool],
+        *,
+        wait: Callable[[float, Callable[[], bool]], None] | None = None,
+    ) -> None:
         """Poll until ``should_stop()``.
 
-        A transport failure is logged and retried rather than fatal: Telegram
-        being briefly unreachable is a normal condition, not an error (R11).
+        A transport failure is retried rather than fatal — Telegram being briefly
+        unreachable is a normal condition, not an error (R11).
+
+        **But retrying must not be free.** The first version of this loop had no
+        backoff and no deduplication, and running the container with a deliberately
+        wrong token produced *four identical audit rows inside one second* — it
+        would have spun at full speed forever on a 2-vCPU box shared with the
+        students' bot, filling the disk with identical rows. Found by running it,
+        not by a test.
+
+        So: exponential backoff capped at :data:`MAX_POLL_BACKOFF_SECONDS`, reset
+        on any success; a repeated identical failure is **counted, not re-recorded**,
+        with one summary row when it finally clears; and a *permanent* failure (a
+        wrong token) jumps straight to the cap and is audited ``RED``, because no
+        amount of retrying will fix it and the owner has to act.
         """
+        pause = wait or self._interruptible_wait
         offset = self._offsets.read() if self._offsets is not None else 0
+        backoff = 0.0
+        repeats = 0
+        last_error = ""
+
         while not should_stop():
             try:
                 offset = self.poll_once(offset)
             except TransportError as exc:
+                message = str(exc)
+                if message == last_error:
+                    # Same failure again: count it, do not write another row.
+                    repeats += 1
+                else:
+                    last_error = message
+                    repeats = 0
+                    self._audit.record(
+                        AuditEvent(
+                            actor="system",
+                            action="door.poll.error",
+                            outcome="error",
+                            blast="RED" if exc.is_permanent else "GREEN",
+                            reason=(
+                                f"TELEGRAM REJECTED THE CREDENTIAL ({exc}) — this will not "
+                                "recover on its own; the bot token needs the owner"
+                                if exc.is_permanent
+                                else f"telegram unreachable: {exc}; backing off"
+                            ),
+                        )
+                    )
+                backoff = (
+                    MAX_POLL_BACKOFF_SECONDS
+                    if exc.is_permanent
+                    else min(max(backoff * 2, 1.0), MAX_POLL_BACKOFF_SECONDS)
+                )
+                pause(backoff, should_stop)
+                continue
+
+            if backoff:
                 self._audit.record(
                     AuditEvent(
                         actor="system",
-                        action="door.poll.error",
-                        outcome="error",
-                        reason=f"telegram unreachable: {exc}",
+                        action="door.poll.recovered",
+                        outcome="ok",
+                        reason=(
+                            f"polling recovered after {repeats + 1} consecutive failure(s) "
+                            f"({last_error})"
+                        ),
                     )
                 )
+            backoff = 0.0
+            repeats = 0
+            last_error = ""

@@ -7,7 +7,8 @@ verified with no token and no network. The most important test in this file is
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ import pytest
 
 from vizier.conscience.audit import AuditLog
 from vizier.door.telegram import (
+    MAX_POLL_BACKOFF_SECONDS,
+    POLL_TICK_SECONDS,
     Allowlist,
     Door,
     InboundMessage,
@@ -37,10 +40,13 @@ class FakeTransport:
         self._batches = updates or []
         self.fail_on: set[str] = set()
 
+    #: Status attached to forced failures, so permanence can be simulated.
+    fail_status: int | None = None
+
     def call(self, method: str, params: Mapping[str, Any]) -> Mapping[str, Any]:
         self.calls.append((method, params))
         if method in self.fail_on:
-            raise TransportError(f"{method}: forced failure")
+            raise TransportError(f"{method}: forced failure", status=self.fail_status)
         if method == "getUpdates":
             batch = self._batches.pop(0) if self._batches else []
             return {"result": batch}
@@ -466,5 +472,146 @@ def test_a_transport_failure_while_polling_is_audited_not_fatal(tmp_path: Path) 
         stop["n"] += 1
         return stop["n"] > 2
 
-    door.run(should_stop)  # must not raise
+    door.run(should_stop, wait=lambda _s, _c: None)  # must not raise
     assert audit.count_where(action="door.poll.error", outcome="error") >= 1
+
+
+# ─── poll backoff: found by RUNNING the container, not by a test ────────────
+#
+# The first version of `Door.run` retried with no backoff and no deduplication.
+# Running the image with a deliberately wrong token produced FOUR IDENTICAL audit
+# rows inside one second, and would have spun at full speed forever — burning CPU
+# on a 2-vCPU box shared with the students' bot and filling the disk with
+# identical rows. Every unit test passed the whole time. These tests exist so it
+# cannot come back.
+
+
+def _run_failing(
+    tmp_path: Path, *, iterations: int, status: int | None = None
+) -> tuple[AuditLog, list[float]]:
+    transport = FakeTransport()
+    transport.fail_on = {"getUpdates"}
+    transport.fail_status = status
+    door, _, audit, _ = build(tmp_path, transport=transport)
+
+    slept: list[float] = []
+    counter = {"n": 0}
+
+    def should_stop() -> bool:
+        counter["n"] += 1
+        return counter["n"] > iterations
+
+    def wait(seconds: float, _should_stop: Callable[[], bool]) -> None:
+        slept.append(seconds)
+
+    door.run(should_stop, wait=wait)
+    return audit, slept
+
+
+def test_repeated_polling_failures_back_off_exponentially(tmp_path: Path) -> None:
+    _, slept = _run_failing(tmp_path, iterations=6)
+    assert slept == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0]
+
+
+def test_backoff_is_capped(tmp_path: Path) -> None:
+    """A cap keeps the delay bounded so recovery is not needlessly slow."""
+    _, slept = _run_failing(tmp_path, iterations=12)
+    assert max(slept) == MAX_POLL_BACKOFF_SECONDS
+    assert slept[-1] == MAX_POLL_BACKOFF_SECONDS
+
+
+def test_an_identical_repeated_failure_is_counted_not_re_recorded(tmp_path: Path) -> None:
+    """The actual defect: 20 identical failures must not write 20 identical rows."""
+    audit, _ = _run_failing(tmp_path, iterations=20)
+    assert audit.count_where(action="door.poll.error") == 1
+
+
+def test_a_permanent_credential_failure_goes_straight_to_the_cap_and_is_loud(
+    tmp_path: Path,
+) -> None:
+    """A wrong token will not fix itself. Retrying it quickly is pure waste, and
+    the owner has to be told rather than left with a bot that looks alive."""
+    audit, slept = _run_failing(tmp_path, iterations=3, status=401)
+
+    assert slept == [MAX_POLL_BACKOFF_SECONDS] * 3
+    rows = [row for row in audit.read_all() if row.get("action") == "door.poll.error"]
+    assert len(rows) == 1
+    assert rows[0]["blast"] == "RED"
+    assert "REJECTED THE CREDENTIAL" in str(rows[0]["reason"])
+
+
+@pytest.mark.parametrize(
+    ("status", "permanent"), [(401, True), (403, True), (404, True), (500, False), (None, False)]
+)
+def test_permanence_classification(status: int | None, permanent: bool) -> None:
+    assert TransportError("x", status=status).is_permanent is permanent
+
+
+def test_recovery_is_recorded_with_the_failure_count(tmp_path: Path) -> None:
+    """One summary row when it clears, so the outage is visible in the log without
+    a row per attempt."""
+    transport = FakeTransport([[], [text_update(1, OWNER)]])
+    transport.fail_on = {"getUpdates"}
+    door, _, audit, _ = build(tmp_path, transport=transport)
+
+    counter = {"n": 0}
+
+    def should_stop() -> bool:
+        counter["n"] += 1
+        if counter["n"] == 4:
+            transport.fail_on = set()  # the outage clears
+        return counter["n"] > 6
+
+    door.run(should_stop, wait=lambda _s, _c: None)
+
+    recovered = [row for row in audit.read_all() if row.get("action") == "door.poll.recovered"]
+    assert len(recovered) == 1
+    assert "consecutive failure(s)" in str(recovered[0]["reason"])
+
+
+def test_a_healthy_loop_never_sleeps_and_never_records_a_poll_error(tmp_path: Path) -> None:
+    transport = FakeTransport([[text_update(1, OWNER)]])
+    door, _, audit, _ = build(tmp_path, transport=transport)
+
+    counter = {"n": 0}
+    slept: list[float] = []
+
+    def should_stop() -> bool:
+        counter["n"] += 1
+        return counter["n"] > 2
+
+    door.run(should_stop, wait=lambda seconds, _c: slept.append(seconds))
+
+    assert slept == []
+    assert audit.count_where(action="door.poll.error") == 0
+    assert audit.count_where(action="door.poll.recovered") == 0
+
+
+def test_the_backoff_wait_is_interruptible_so_shutdown_is_prompt() -> None:
+    """A single long sleep meant SIGTERM went unnoticed for up to a minute.
+
+    Measured on a real container: asked to stop during a backoff, it took **29
+    seconds** to exit, and Docker sends SIGKILL after 10 — so a redeploy during an
+    outage would kill it mid-write. The wait now returns as soon as the stop flag
+    is set, and no single slice exceeds POLL_TICK_SECONDS.
+    """
+    assert POLL_TICK_SECONDS <= 1.0, "a slice longer than Docker's grace period defeats the point"
+
+    stop = {"flag": False}
+    started = time.monotonic()
+
+    def should_stop() -> bool:
+        # Stop is requested immediately, as a signal handler would.
+        stop["flag"] = True
+        return stop["flag"]
+
+    Door._interruptible_wait(MAX_POLL_BACKOFF_SECONDS, should_stop)
+
+    assert time.monotonic() - started < 1.5, "a requested stop must not wait out the full backoff"
+
+
+def test_the_wait_actually_waits_when_not_stopping() -> None:
+    """The other direction: it must not busy-spin through the backoff either."""
+    started = time.monotonic()
+    Door._interruptible_wait(0.05, lambda: False)
+    assert time.monotonic() - started >= 0.05

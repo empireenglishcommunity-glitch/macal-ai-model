@@ -23,6 +23,9 @@ dev = [
   "types-PyYAML",
 ]
 
+[project.scripts]
+macal-vizier = "vizier.main:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
