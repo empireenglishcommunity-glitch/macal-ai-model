@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "macal-vizier"
+version = "0.1.0"
+description = "The Vizier — a personal AI agent: one door, one memory, many hands"
+readme = "README.md"
+license = { text = "MIT" }
+# python3.12 is mandatory, not a preference: 3.9 fails collection on `X | Y`
+# unions, which has already cost this ecosystem a debugging session.
+requires-python = ">=3.12"
+dependencies = [
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "types-PyYAML",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle errors
+  "F",    # pyflakes
+  "W",    # pycodestyle warnings
+  "I",    # import sorting
+  "N",    # pep8-naming
+  "UP",   # pyupgrade
+  "B",    # bugbear
+  "SIM",  # simplify
+  "RUF",  # ruff-specific
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "tools"]
+strict = true
+warn_unreachable = true
+# Errors must name a code so a future suppression is explicit about what it hides
+show_error_codes = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+# -ra surfaces skipped/xfailed reasons: a silently skipped test is a test that
+# did not look, which is this ecosystem's most expensive failure mode.
+addopts = "-ra --strict-markers"

@@ -235,7 +235,8 @@ Enforcement is layered so that no single failure is fatal:
 
 | Layer | Mechanism |
 |---|---|
-| **Credential** | the GitHub token cannot push to `main`; the SSH key has a forced-command allowlist. Prompt-independent. |
+| **Branch rule** | ⭐ a GitHub **ruleset** on the default branch requiring a pull request, with an **empty bypass list**. See the correction below. |
+| **Credential** | the token carries **no `Administration` and no `Workflows` permission**, so it can neither change the branch rule that gates it nor edit the CI that catches it. The SSH key has a forced-command allowlist. Prompt-independent. |
 | **Process** | container, non-root, read-only root filesystem, no host mounts, explicit memory/CPU limits, capped concurrency |
 | **Code** | the classifier; `BLACK` raises before any side effect; a test asserts every `BLACK` entry refuses |
 | **Data** | append-only audit table; `/halt` sets a flag every hand checks |
@@ -245,6 +246,45 @@ Enforcement is layered so that no single failure is fatal:
 paths are `BLACK`, and a test asserts it — the same structural posture as Aql's tool bound,
 and the reason the standing rule *"never remove a payment approval gate"* holds even against
 the assistant itself.
+
+#### ✏️ Correction to D7, 2026-08-31 — the token alone does **not** protect `main`
+
+As first written, this section claimed the credential layer made `main` unreachable. **That
+was wrong**, and it is the kind of wrong that would have been discovered only after something
+was already pushed. A fine-grained PAT with `Contents: write` **can** push directly to
+`main`. The token acts as its creator, who is an org owner, so no permission checkbox on the
+token prevents it.
+
+What actually enforces it is a **branch ruleset**, and it only works with an empty bypass
+list — an org or repository admin in the bypass list defeats the whole thing silently.
+
+**Configured and verified live, 2026-08-31:**
+
+```
+ruleset  protect-main   id 21968385   enforcement: active
+target   ~DEFAULT_BRANCH
+rules    pull_request · non_fast_forward · deletion
+bypass_actors  []            ← the load-bearing detail
+```
+
+```
+PUT /repos/.../contents/.vizier-gate-test  (branch: main)
+→ HTTP 409
+  "Repository rule violations found\n\nChanges must be made through a pull request."
+```
+
+A follow-up check confirmed **no file was created** (`GET .vizier-gate-test` → 404) and
+`main`'s tree is unchanged. The `409` is the success condition; a `201` would have meant the
+gate was decorative.
+
+**Consequence accepted deliberately:** with an empty bypass list the **owner** cannot push to
+`main` either — only merge PRs. That matches his own standing rule ("never push to `main`,
+even for docs") and moves it from memory to mechanism. It also means the bootstrap commit
+`826f75c` could not be repeated today, which is correct.
+
+**The general lesson, recorded because it will recur:** a permission model has to be tested by
+*attempting the forbidden thing*. Reading the checkbox list is not verification — it is the
+same error as trusting a green test suite.
 
 **Rejected:** trusting the system prompt (a prompt is a suggestion, not a boundary);
 approval on everything (the owner stops reading and rubber-stamps — the "red check on a

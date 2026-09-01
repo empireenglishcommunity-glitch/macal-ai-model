@@ -1,0 +1,100 @@
+name: ci
+
+# Every step below carries `if: ${{ !cancelled() }}`.
+# Reason, learned expensively in this ecosystem: CI stopped at the first failing
+# step, so later checks never ran at all — a pace check sat unexecuted for days
+# while the build looked merely "red for one reason". Running every check every
+# time is the difference between one known failure and an unknown number.
+#
+# There is also a `schedule` and a `workflow_dispatch` on purpose: `main` must
+# not be able to sit unverified. A squash merge inheriting a bot commit's
+# message once suppressed runs entirely, which is worse than red.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # python3.12 is mandatory: 3.9 fails collection on `X | Y` unions.
+      - name: Set up Python 3.12
+        if: ${{ !cancelled() }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        if: ${{ !cancelled() }}
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Confirm the interpreter is 3.12
+        if: ${{ !cancelled() }}
+        run: python -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version; print(sys.version)"
+
+      - name: Lint (ruff)
+        if: ${{ !cancelled() }}
+        run: ruff check .
+
+      - name: Format check (ruff)
+        if: ${{ !cancelled() }}
+        run: ruff format --check .
+
+      - name: Types (mypy strict)
+        if: ${{ !cancelled() }}
+        run: mypy
+
+      - name: Tests
+        if: ${{ !cancelled() }}
+        run: pytest -q
+
+      # Belt and braces alongside tests/test_no_model_names_in_code.py: the test
+      # can be skipped or deselected, a grep in CI cannot.
+      # NOTE the trailing `($|[^a-zA-Z])` rather than `\b`. `\bqwen\b` does NOT
+      # match `qwen3:8b` — `3` is a word character — so a `\b`-terminated grep
+      # silently passes almost every real model identifier. It must stay in
+      # lockstep with PATTERN in tests/test_no_model_names_in_code.py; a
+      # disagreement between the two means one of them is theatre.
+      - name: Gate — no model or vendor names in src/
+        if: ${{ !cancelled() }}
+        run: |
+          if grep -rniE '\b(gpt|claude|sonnet|opus|haiku|llama|qwen|gemini|gemma|kimi|deepseek|mistral|mixtral|grok)($|[^a-zA-Z])' src/ ; then
+            echo "::error::model or vendor name found in src/ — it belongs in config.yaml (design.md D4)"
+            exit 1
+          fi
+          echo "OK no model or vendor names in src/"
+
+      - name: Gate — no secrets in tracked files
+        if: ${{ !cancelled() }}
+        run: python3 tools/check_no_secrets.py
+
+      - name: Gate — requirements traced to tasks
+        if: ${{ !cancelled() }}
+        run: python3 tools/check_traceability.py
+
+      # `.env.example` is committed. A value in it is a leaked credential.
+      - name: Gate — .env.example holds names only
+        if: ${{ !cancelled() }}
+        run: |
+          if grep -vE '^\s*(#|$)' .env.example | grep -E '=.+' ; then
+            echo "::error::.env.example must contain variable NAMES only, never values"
+            exit 1
+          fi
+          echo "OK .env.example contains no values"
