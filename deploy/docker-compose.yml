@@ -1,0 +1,63 @@
+# The Vizier — STANDALONE compose file.
+#
+# Deliberately separate from the existing Empire English stack. That stack runs
+# the learning bot for 17 real students on a 2 vCPU / 4 GB box, and a new service
+# must not be able to take it down through a shared compose file, a shared
+# network, or a bare `docker compose up --build` that rebuilds everything.
+#
+# Bring it up BY SERVICE NAME:
+#     docker compose -f deploy/docker-compose.yml up -d --build macal-vizier
+#
+# It can be folded into the main stack later. It does not need to be.
+
+services:
+  macal-vizier:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: macal-vizier:latest
+    container_name: macal-vizier
+    restart: unless-stopped
+
+    # Secrets live only here, on the host, mode 600. Never in the image, never in
+    # git, never in a build arg (build args are visible in image history).
+    env_file:
+      - /opt/macal-vizier/.env
+
+    # ── No ports. ────────────────────────────────────────────────────────
+    # Long-polling is outbound only. Publishing a port here would open a hole in
+    # the real firewall for no benefit, because Docker bypasses UFW on this host
+    # and localhost-binding IS the firewall.
+
+    # ── Containment (R7.3) ───────────────────────────────────────────────
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # ── Budget (N2: <=400 MB, <=0.5 vCPU) ────────────────────────────────
+    # Hard limits, not guidance. The learning bot's headroom on this box is not
+    # something a new service gets to borrow silently.
+    mem_limit: 400m
+    memswap_limit: 400m
+    cpus: 0.5
+    pids_limit: 128
+
+    # ── The only writable paths ──────────────────────────────────────────
+    # Everything else is read-only, so a bug cannot rewrite the code that is
+    # running. Create these on the host first and chown them to 10001:10001.
+    volumes:
+      - /opt/macal-vizier/data:/opt/macal-vizier/data
+      - /opt/macal-vizier/logs:/opt/macal-vizier/logs
+
+    # A container that fills the disk with logs takes the whole box down, students
+    # included. The audit log is the durable record; this is just stdout.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
