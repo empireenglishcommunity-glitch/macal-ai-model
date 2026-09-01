@@ -14,12 +14,14 @@
 
 | | |
 |---|---|
-| **Phase** | **0 — spec authored, awaiting owner approval** |
-| **Implemented** | **NOTHING. Zero runtime code exists.** |
-| **Deployed** | Nothing. The Hetzner server has not been touched. |
-| **Blocked on** | Owner approval of this spec + the 3 credentials in `design.md` §7 |
-| **Last verified** | 2026-08-31 — `git log --oneline` in this repo shows only the bootstrap commit |
-| **Next action** | Owner reviews PR; on approval, Phase 1 task 1.1 |
+| **Phase** | **1 — in progress. Task 1.1 complete; 1.2 is next.** |
+| **Spec** | Approved by the owner and merged (PR #1, merge commit `7820d3e`). |
+| **Credentials** | ✅ All three exist on the server at `/opt/macal-vizier/.env` (mode 600). Telegram bot `@macal_ai_assisstant_bot` live · Groq key created · GitHub fine-grained PAT created. |
+| **Implemented** | **Task 1.1 only** — package skeleton, config contract, `.env.example`, 5 CI gates, 31 tests. **No door, no brain, no memory, no hands yet: the Vizier cannot be talked to.** |
+| **Deployed** | ❌ Nothing. **The Hetzner server runs no Vizier code** — the only thing on it is the `.env` file the owner created. Deployment is task 1.8. |
+| **Verified** | 2026-08-31, locally under `python3.12` (3.12.13): `ruff check` clean · `ruff format --check` 24 files clean · `mypy` strict, 15 files, no issues · `pytest -q` **31 passed** · both gate scripts exit 0. CI on the branch is the independent confirmation. |
+| **`main` protection** | ✅ Ruleset `protect-main` (id 21968385) active, `bypass_actors: []`. A direct PUT to `main` returns **409** "Changes must be made through a pull request." Verified live. |
+| **Next action** | Task 1.2 — Telegram door with the allowlist, written **before** any brain adapter exists. Needs the Groq model list from the owner for 1.3. |
 
 **Rules for whoever executes this (including future me):**
 
@@ -51,7 +53,7 @@ auditable. **No hands yet.**
   Long-poll loop, owner-ID allowlist, media download, chunked outbound, `<3 s`
   acknowledgement, interim message for `>10 s` work. **Allowlist is written before the first
   model call exists**, so no unauthenticated path is ever possible.
-  → *R:* R1, R7.1 · *D:* D12
+  → *R:* R1, R7.1, N4 · *D:* D12
   **✔ Verify:** send from phone, desktop and web — 3 replies. Send from a second account —
   **0** model calls and 1 audit row (paste both queries).
 
@@ -65,8 +67,8 @@ auditable. **No hands yet.**
 - [ ] **1.4 — Conscience: classifier, gate, audit, `/halt`**
   Blast classification, `BLACK` refusal before any side effect, append-only `audit` table,
   `/halt` flag checked by every hand path. Built **before any hand exists** so no hand can
-  ever predate its gate.
-  → *R:* R7.1, R7.7, R7.8, R7.9 · *D:* D7
+  ever predate its gate. One audit query must reconstruct a whole turn end to end (N7).
+  → *R:* R7.1, R7.7, R7.8, R7.9, N7 · *D:* D7
   **✔ Verify:** a parametrised test asserts **every** `BLACK` entry refuses and writes an
   audit row; `/halt` during a simulated long task stops it; `ops audit --last 20` renders.
 
@@ -254,7 +256,7 @@ auditable. **No hands yet.**
 - [ ] **7.1 — Tier D: Ollama on the Windows PC; sensitive ministries refuse to route out** → *R:* R12.4
   **✔ Verify:** with the PC off, a sensitive-ministry turn **refuses and explains** rather than
   falling back to an API. Audit shows zero third-party calls.
-- [ ] **7.2 — Offline queue + restart safety under load** → *R:* R11.2, R11.5
+- [ ] **7.2 — Offline queue + restart safety under load; at-least-once with idempotency** → *R:* R11.2, R11.5, N5
   **✔ Verify:** `kill -9` mid-task ×10 → no partial branch, no partial write, no orphaned
   approval, no lost input.
 - [ ] **7.3 — Encrypted memory backups + restore drill** → *R:* R12.3
@@ -294,8 +296,10 @@ The build **fails** if any requirement below has no task referencing it.
 | R5 | 4.2, 4.3 | R11 | 1.3, 7.2 |
 | R6 | 1.7 | R12 | 3.1, 7.1, 7.3 |
 | N1 | 4.1 | N6 | 1.1, 1.3 |
-| N2 | 1.8 | N9 | 1.1, 2.5 |
-| N3 | 2.5 | N10 | 7.5 |
+| N2 | 1.8 | N7 | 1.4 |
+| N3 | 2.5 | N9 | 1.1, 2.5 |
+| N4 | 1.2 | N10 | 7.5 |
+| N5 | 7.2 | | |
 | S1 | 2.6 | S6 | 3.5 |
 | S3 | 5.5 | S7 | 7.5 |
 | S2, S4, S5, S8 | measured over 14–30 days of real use, not by a task |

@@ -1,0 +1,131 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# The Vizier — master configuration
+# ═══════════════════════════════════════════════════════════════════════════
+# THIS FILE IS THE ONLY PLACE A MODEL NAME MAY APPEAR (design.md D4, N6).
+# `tests/test_no_model_names_in_code.py` fails the build if a model or vendor
+# name appears anywhere in src/.
+#
+# NO SECRET VALUES HERE, EVER. Secrets are referenced by ENVIRONMENT VARIABLE
+# NAME only (`api_key_env`). The loader reads the value at runtime and never
+# logs it. `tools/check_no_secrets.py` fails the build on a secret-shaped
+# string in any tracked file.
+# ═══════════════════════════════════════════════════════════════════════════
+
+version: 1
+
+# ─── Brains ────────────────────────────────────────────────────────────────
+# A provider is *how* to reach models. A tier is *which* model to use for a
+# class of work. Adding a provider must be one adapter + one entry here.
+brains:
+  # $0 is ENFORCED, not intended (requirement N1). While this is false, the
+  # loader REFUSES to start if any enabled tier points at a paid provider.
+  # Flipping it requires a written owner exception — see design.md §7 item 7.
+  allow_paid_providers: false
+
+  providers:
+    groq:
+      kind: openai_compatible
+      base_url: https://api.groq.com/openai/v1
+      api_key_env: VIZIER_GROQ_API_KEY
+      paid: false
+
+    # Tier D — the private/offline brain on the owner's Windows PC.
+    # Disabled until Phase 7; no key, nothing leaves the house.
+    ollama:
+      kind: ollama
+      base_url: http://127.0.0.1:11434
+      api_key_env: null
+      paid: false
+
+  # Every tier ships DISABLED and with `model: null`.
+  # This is deliberate and it is the fail-closed posture (constraint 11):
+  # no adapter exists until task 1.3, so nothing may claim to be usable.
+  # Task 1.3 fills these in from the owner's REAL Groq model list —
+  # they are not guessed here.
+  tiers:
+    reflex:
+      provider: groq
+      model: null
+      enabled: false
+      max_tokens: 512
+      temperature: 0.0
+    thinking:
+      provider: groq
+      model: null
+      enabled: false
+      max_tokens: 4096
+      temperature: 0.3
+    deep:
+      provider: groq
+      model: null
+      enabled: false
+      max_tokens: 8192
+      temperature: 0.3
+    private:
+      provider: ollama
+      model: null
+      enabled: false
+      max_tokens: 4096
+      temperature: 0.3
+
+  # Ordered fallback per requested tier (R11.1–R11.3). Rate limiting causes a
+  # fallthrough, never a failed turn. If every entry is exhausted the turn is
+  # QUEUED and the owner is told — input is never lost (R11.2).
+  fallback:
+    reflex: [reflex, thinking, private]
+    thinking: [thinking, reflex, private]
+    deep: [deep, thinking, private]
+    private: [private]
+
+# ─── Door ──────────────────────────────────────────────────────────────────
+door:
+  telegram:
+    token_env: VIZIER_TELEGRAM_TOKEN
+    # Only these Telegram user IDs are ever obeyed (R1.3). A message from any
+    # other ID is discarded and audited, and NO model call is made.
+    owner_ids_env: VIZIER_TELEGRAM_OWNER_ID
+    ack_after_seconds: 3
+    interim_after_seconds: 10
+    poll_timeout_seconds: 30
+
+# ─── GitHub ────────────────────────────────────────────────────────────────
+github:
+  token_env: VIZIER_GITHUB_TOKEN
+  org: empireenglishcommunity-glitch
+  # Phase 1: this repository only (design.md §7 item 4). Widening this list is
+  # an owner decision, not an implementation detail.
+  allowed_repos:
+    - macal-ai-model
+  # Structurally unreachable. Enforced in three places, not one:
+  #   1. the branch ruleset `protect-main` (id 21968385, bypass_actors: [])
+  #   2. the token's permissions (no Administration, no Workflows)
+  #   3. this list, checked before any push is attempted
+  # Verified 2026-08-31: a direct PUT to main returned HTTP 409
+  # "Changes must be made through a pull request."
+  protected_branches:
+    - main
+    - master
+
+# ─── Paths ─────────────────────────────────────────────────────────────────
+paths:
+  # The memory TEXT repo is the authority; the SQLite index is derived and
+  # rebuildable from it (design.md D6). Both live outside this repo, because
+  # this repository is PUBLIC.
+  memory_repo: /opt/macal-vizier/macal-memory
+  database: /opt/macal-vizier/data/vizier.db
+  audit_log: /opt/macal-vizier/logs/audit.jsonl
+
+# ─── Limits ────────────────────────────────────────────────────────────────
+limits:
+  max_tool_calls_per_turn: 5 # bounded orchestrator (design.md D3)
+  max_concurrent_dispatches: 1 # the box is 2 vCPU / 4 GB (N2)
+  approval_timeout_seconds: 300 # a RED approval auto-REJECTS on expiry
+  turn_timeout_seconds: 600
+
+# ─── Logging ───────────────────────────────────────────────────────────────
+logging:
+  level: INFO
+  format: json
+  # If true, a log line that appears to contain a secret value is dropped
+  # rather than written. Never turn this off.
+  redact_secrets: true
