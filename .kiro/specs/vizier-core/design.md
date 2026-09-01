@@ -368,6 +368,107 @@ install (violates D7); a separate box (breaks the $7 ceiling).
 
 ---
 
+### D13 — Screen every inbound message with a purpose-built injection classifier ⭐
+
+**Unplanned. This decision exists because the owner's real model list contained something
+better than anything the design had planned for.**
+
+`meta-llama/llama-prompt-guard-2-86m` and `-22m` are **dedicated prompt-injection and
+jailbreak classifiers** — 86M and 22M parameters, 512-token context — available on the same
+free key. A 22M-parameter classifier costs approximately nothing and returns approximately
+instantly.
+
+**Decision.** Every inbound message is screened by prompt-guard **after** the allowlist and
+**before** the orchestrator, as a `GREEN` pre-step in the Conscience. A positive result does
+not silently drop the message: it is audited with the score, and the turn proceeds in a
+restricted mode that offers **no tools at all**, so the worst case is an unhelpful answer
+rather than an action.
+
+**Why this is worth a decision of its own.** R7 and success criterion S6 previously relied on
+guardrails the Vizier applies to its *own output*, plus a 50-prompt red-team set in CI. That
+detects a bad *answer*. It does not detect a hostile *input* before the orchestrator has
+already reasoned about it and possibly selected a tool. A classifier trained for exactly this
+job, running before the reasoning, is a different and better layer — and it is free.
+
+**Honest limits, stated now:** a 512-token window cannot see a long document, so this screens
+the *instruction*, not attached content; and a classifier is a probability, never a boundary.
+It sits **on top of** the `BLACK` list and the approval gates, which remain the actual
+enforcement (D7). It is defence in depth, not a replacement for depth.
+
+**Rejected:** relying on the orchestrator's own judgement (the thing being attacked cannot be
+the thing detecting the attack); a hand-written keyword blocklist (trivially evaded, and it
+would fire on legitimate owner instructions such as "ignore the previous plan").
+
+---
+
+## 2.1 Measured model availability — and one correction to D4
+
+Queried against the owner's own Groq key, **2026-09-01**. Recorded because model catalogues
+change monthly and this ecosystem's rule is that a documented figure must be re-derived, not
+inherited. **Re-run before trusting any row of this table:**
+
+```bash
+curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer ${VIZIER_GROQ_API_KEY}"
+```
+
+**14 models, all active.** Grouped by what they are actually for:
+
+| Purpose | Model | Context | Note |
+|---|---|--:|---|
+| **Reasoning, large** | `openai/gpt-oss-120b` | 131,072 | the strongest thing reachable on this key |
+| **Reasoning, mid** | `qwen/qwen3.8-27b` · `qwen/qwen3.6-27b` | 131,042 · 131,072 | 27B; the `131,042` is as reported, not a typo of ours |
+| **Reasoning, small** | `openai/gpt-oss-20b` | 131,072 | fast, cheap, full context |
+| **Arabic specialist** | `allam-2-7b` (SDAIA) | 4,096 | Arabic-first, but a small window |
+| **Agentic system** | `groq/compound` · `-mini` | 131,072 | brings its **own** tool loop — see below |
+| **Injection classifier** | `meta-llama/llama-prompt-guard-2-{86m,22m}` | 512 | → **D13** |
+| **Output safety** | `openai/gpt-oss-safeguard-20b` | 131,072 | candidate for the delivery guardrail (R6.3) |
+| **Speech → text** | `whisper-large-v3` · `-turbo` | — | → **D11 confirmed** |
+| **Text → speech** | `canopylabs/orpheus-arabic-saudi` · `-v1-english` | 4,000 | → see D11 note |
+
+### ✏️ Correction to D4 — tier C is weaker than the design assumed
+
+D4 specified tier C as *"a near-frontier open-weight model (DeepSeek-V4-Pro / Kimi-K3
+class)"*. **Neither is on this key, and nothing of that class is.** The strongest model
+available is `openai/gpt-oss-120b`.
+
+This is a **real capability gap, recorded rather than papered over**: hard multi-file
+architectural work will be measurably weaker than the design implied. Reaching a
+93–96%-SWE-bench-class model means a different provider, which in practice means paid, which
+requires the owner's written exception (N1). **Deferred to task 4.1's bake-off with real
+numbers, not resolved by assumption here.** Phases 1–3 do not need tier C.
+
+### Tier assignments for task 1.3
+
+| Tier | Model | Why this one |
+|:--:|---|---|
+| **A — reflex** | `openai/gpt-oss-20b` | smallest reasoning model with a *full* 131k window; ~90% of calls are routing and classification |
+| **B — thinking** | `qwen/qwen3.8-27b` | newest mid model; the default workhorse |
+| **C — deep** | `openai/gpt-oss-120b` | the strongest available — with the gap above recorded |
+| **D — private** | Ollama, owner's PC | unchanged; still disabled until Phase 7 |
+
+**`groq/compound` rejected for tier C**, despite being tempting: it is an agentic *system*
+with its own built-in tool use, and pointing the bounded orchestrator at it means two agent
+loops interleaving. D3's tool bound is structural precisely because it is enforced by *not
+offering a tool schema* on the final turn — a model that calls tools on its own initiative
+breaks that guarantee silently. It is a good candidate for a future explicit
+`research`/`web-search` hand, where its tool use is the point and is contained.
+
+### D11 confirmed, plus one gap it had not acknowledged
+
+**Transcription is settled and free:** `whisper-large-v3-turbo` primary, `whisper-large-v3` as
+the accuracy fallback, both on the key that already exists. No new provider, no new
+credential.
+
+**And a gap in D11 that this list exposes:** D11 specified Kokoro for TTS, but Kokoro's voices
+are English — **Arabic voice output was an unstated hole in R5.4**, and the owner is Egyptian
+writing for Arabic-speaking students. `canopylabs/orpheus-arabic-saudi` is a candidate.
+Flagged, **not decided**, for two honest reasons: the dialect is Saudi, not Egyptian, which is
+a content judgement rather than a technical one; and this entry's capability is inferred from
+its name and context size, so it must be **verified against the endpoint** before any design
+depends on it. Task 4.3 owns that.
+
+---
+
 ## 3. Components
 
 | Component | Responsibility | Key requirements |

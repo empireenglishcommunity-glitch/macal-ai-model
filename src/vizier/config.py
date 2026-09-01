@@ -294,6 +294,18 @@ def find_secret_shapes(text: str) -> tuple[str, ...]:
     return tuple(found)
 
 
+def redact(text: str) -> str:
+    """Replace anything secret-shaped with a marker.
+
+    Used on every audit row and every log line before it is written. The audit log
+    is the one thing that must record *everything*, which makes it the one thing
+    most likely to capture a credential by accident.
+    """
+    for pattern in SECRET_SHAPES:
+        text = pattern.sub("[REDACTED]", text)
+    return text
+
+
 def parse_config(raw: Mapping[str, Any]) -> Config:
     """Validate an already-parsed mapping into a :class:`Config`.
 
