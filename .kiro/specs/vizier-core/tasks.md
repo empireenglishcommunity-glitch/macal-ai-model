@@ -14,14 +14,15 @@
 
 | | |
 |---|---|
-| **Phase** | **1 — in progress. Task 1.1 complete; 1.2 is next.** |
+| **Phase** | **1 — in progress. Tasks 1.1 and 1.2 complete; 1.3 is next.** |
 | **Spec** | Approved by the owner and merged (PR #1, merge commit `7820d3e`). |
 | **Credentials** | ✅ All three exist on the server at `/opt/macal-vizier/.env` (mode 600). Telegram bot `@macal_ai_assisstant_bot` live · Groq key created · GitHub fine-grained PAT created. |
-| **Implemented** | **Task 1.1 only** — package skeleton, config contract, `.env.example`, 5 CI gates, 31 tests. **No door, no brain, no memory, no hands yet: the Vizier cannot be talked to.** |
+| **Implemented** | **Tasks 1.1 + 1.2** — config contract, `clock.py` (the one time-helper set), append-only audit log, Telegram door with the allowlist. **114 tests.** No brain, no memory, no hands. **The door exists but nothing behind it can think yet, and nothing is deployed, so the Vizier still cannot be talked to.** |
 | **Deployed** | ❌ Nothing. **The Hetzner server runs no Vizier code** — the only thing on it is the `.env` file the owner created. Deployment is task 1.8. |
 | **Verified** | 2026-08-31, locally under `python3.12` (3.12.13): `ruff check` clean · `ruff format --check` 24 files clean · `mypy` strict, 15 files, no issues · `pytest -q` **31 passed** · both gate scripts exit 0. CI on the branch is the independent confirmation. |
 | **`main` protection** | ✅ Ruleset `protect-main` (id 21968385) active, `bypass_actors: []`. A direct PUT to `main` returns **409** "Changes must be made through a pull request." Verified live. |
-| **Next action** | Task 1.2 — Telegram door with the allowlist, written **before** any brain adapter exists. Needs the Groq model list from the owner for 1.3. |
+| **Model list** | ✅ Received and recorded in `design.md` §2.1 — 14 models. Tier A/B/C chosen. **D4 corrected: no DeepSeek/Kimi-class model is available on this key**; strongest is a 120b open model. Two unplanned finds: a dedicated injection classifier (new **D13**) and Whisper on the same key (D11 confirmed). |
+| **Next action** | Task 1.3 — `Brain` protocol, adapter, second adapter to prove N6, router with the fallback chain. After 1.3 the door has something to think with. |
 
 **Rules for whoever executes this (including future me):**
 
@@ -64,11 +65,15 @@ auditable. **No hands yet.**
   **✔ Verify:** block the network with `iptables`/env override — the message is still
   acknowledged and processed after restoration (paste the audit rows showing tier fallthrough).
 
-- [ ] **1.4 — Conscience: classifier, gate, audit, `/halt`**
-  Blast classification, `BLACK` refusal before any side effect, append-only `audit` table,
-  `/halt` flag checked by every hand path. Built **before any hand exists** so no hand can
-  ever predate its gate. One audit query must reconstruct a whole turn end to end (N7).
-  → *R:* R7.1, R7.7, R7.8, R7.9, N7 · *D:* D7
+- [ ] **1.4 — Conscience: classifier, gate, `/halt`, inbound injection screening**
+  Blast classification, `BLACK` refusal before any side effect, `/halt` flag checked by every
+  hand path. Built **before any hand exists** so no hand can ever predate its gate. One audit
+  query must reconstruct a whole turn end to end (N7). *(The append-only audit log itself
+  shipped early, in 1.2, because the allowlist decision is already an auditable event.)*
+  Adds the **D13** pre-step: screen every inbound message with the prompt-guard classifier
+  after the allowlist and before the orchestrator; a positive result audits the score and
+  proceeds with **no tools offered**.
+  → *R:* R7.1, R7.7, R7.8, R7.9, N7 · *D:* D7, D13
   **✔ Verify:** a parametrised test asserts **every** `BLACK` entry refuses and writes an
   audit row; `/halt` during a simulated long task stops it; `ops audit --last 20` renders.
 
